@@ -26,7 +26,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 
 import type { CheckResult, HealthStatus, ProviderConfig } from "../types";
 import { DEFAULT_ENDPOINTS } from "../types";
-import { getErrorMessage, getSanitizedErrorDetail } from "../utils";
+import { getSanitizedErrorDetail } from "../utils";
 import { generateChallenge, validateResponse } from "./challenge";
 import { measureEndpointPing } from "./endpoint-ping";
 
