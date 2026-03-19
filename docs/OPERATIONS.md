@@ -8,8 +8,8 @@
 - pnpm 10
 - 三选一的存储后端：
   - **Supabase**：完整能力部署
-  - **直连 Postgres**：控制面部署
-  - **SQLite**：本地 / 单机部署
+  - **直连 Postgres**：完整单实例部署
+  - **SQLite**：本地 / 单机完整部署
 
 ## 2. 环境变量
 
@@ -68,28 +68,26 @@
 
 ### 3.1 Supabase
 
-Supabase 是当前仓库的**完整能力后端**。正式初始化方式：
+Supabase 是当前仓库能力最完整的后端。正式初始化方式：
 
 1. 执行 `supabase/schema.sql`
 2. 再按顺序执行 `supabase/migrations/`，至少覆盖当前仓库新增的 `admin_users`、`site_settings` 等迁移
 3. 如需排查或补齐部分运行时对象，可在后台的 `/admin/storage` 页面中查看诊断与自动修复结果
 
-Supabase 模式下才提供：
+Supabase 仍然额外提供：
 
-- 历史快照写入
-- 可用性统计视图
 - 运行时迁移检查 / 自动修复
 - Supabase 专属诊断
 
 ### 3.2 直连 Postgres
 
-直连 Postgres 目前主要用于**控制面存储**。首次启动时会自动创建控制面所需表，无需先执行 Supabase schema。
+直连 Postgres 现在可承接完整单实例运行：首次启动时会自动创建控制面表与 `check_history`，无需先执行 Supabase schema；可用性统计直接基于历史记录聚合。
 
 如果你要把 PostgreSQL 纳入正式主备管理，请在 `/admin/storage` 中按以下顺序操作：
 
 1. 保存 PostgreSQL 草稿连接与主/备角色
 2. 执行 PostgreSQL 连接测试，确认握手、`public schema` 权限与控制面表覆盖情况
-3. 执行“导入当前控制面到 PostgreSQL 侧”，把管理员、站点设置、检测配置、模板、分组与通知复制到 PostgreSQL（无论它在当前草稿中是主后端还是备用后端）
+3. 执行“导入当前数据到目标后端”，把管理员、站点设置（含自定义图标）、检测配置、模板、分组、通知与历史记录复制到目标后端
 4. 启用新的主备拓扑
 
 > 这套托管配置不会写进 `site_settings` 或公开页面，而是写入本地 SQLite bootstrap store（默认 `.sisyphus/local-data/storage-bootstrap.db`，可用 `STORAGE_BOOTSTRAP_SQLITE_PATH` 覆盖）。部署时必须确保该文件所在磁盘可持久化，并把该文件当作**明文 secret 存储**来保护。
@@ -102,11 +100,10 @@ Supabase 模式下才提供：
 - `check_request_templates`
 - `group_info`
 - `system_notifications`
+- `check_history`
 
-不提供：
+仍不提供：
 
-- `check_history` 快照写入
-- `availability_stats` 统计视图
 - 数据库租约选主
 - Supabase 运行时迁移能力
 
@@ -115,11 +112,12 @@ Supabase 模式下才提供：
 - v1 只支持 **单主单备** 或 **单主无备**：`Supabase primary / PostgreSQL backup`、`PostgreSQL primary / Supabase backup`，或把备用后端显式设为 `none`
 - 备用后端只作为受控切换目标，不做双写
 - PostgreSQL 连接串由后台持久化管理；Supabase 仍使用当前部署环境中的 `SUPABASE_URL` 与 `SUPABASE_SERVICE_ROLE_KEY`
-- 启用动作会更新 bootstrap authority，并在运行时重置 resolver 缓存；若你的部署是多实例，必须确保所有实例共享同一个 bootstrap SQLite 文件或采用单实例滚动切换
+- 启用动作会更新 bootstrap authority，并在运行时重置 resolver、Dashboard、分组、历史相关内存缓存；若你的部署是多实例，必须确保所有实例共享同一个 bootstrap SQLite 文件或采用单实例滚动切换
+- 当前托管导入会校验**当前数据（含历史记录）**的一致性，但仍然不是双写：如果导入后源端又产生了新历史，启用会被阻止并要求重新导入
 
-### 3.3 SQLite
+### 3.4 SQLite
 
-SQLite 与直连 Postgres 一样，优先承担控制面读写；首次访问会自动初始化控制面表结构。适合：
+SQLite 与直连 Postgres 一样，首次访问会自动初始化控制面表与 `check_history`。适合：
 
 - 本地开发
 - 单机演示
@@ -160,7 +158,7 @@ docker compose up -d
 docker compose -f docker-compose.postgres.yml up -d
 ```
 
-该变体会直接把控制面落到 Compose 内置的 PostgreSQL，而不是先走 SQLite 回退。
+该变体会直接把应用运行数据落到 Compose 内置的 PostgreSQL，而不是先走 SQLite 回退。
 
 本地源码构建覆盖：
 
@@ -193,6 +191,7 @@ docker compose -f docker-compose.postgres.yml -f docker-compose.build.yml up -d 
 - 分组信息
 - 系统通知
 - 站点设置
+- 站点浏览器图标（favicon / 侧栏图标）
 - 存储诊断 / 运行时迁移检查
 - PostgreSQL 候选连接测试 / 只读诊断
 
@@ -233,9 +232,9 @@ VALUES ('OpenAI GPT-4o', 'openai', 'gpt-4o-mini', 'https://api.openai.com/v1/cha
 
 ### 7.2 时间线一直为空
 
-- 确认当前后端是否为 **Supabase**
-- SQLite / 直连 Postgres 默认不提供历史快照能力
-- 若你期望有时间线，请切换到 Supabase 并补齐 schema / migration
+- 确认至少存在一条 `enabled = true` 的检测配置
+- 检查后台 `/admin/storage` 是否报告历史仓库或可用性统计错误
+- 若刚完成托管切换，请确认最近一次“导入当前数据（含历史记录）”成功；若导入后源端又产生了新历史，需要重新导入后再启用
 
 ### 7.3 官方状态显示 unknown
 

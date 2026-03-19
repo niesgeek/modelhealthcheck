@@ -43,8 +43,8 @@ check_configs / request_templates / site_settings
 ### 2.3 控制面存储层
 
 - `lib/storage/resolver.ts`：解析 `supabase | postgres | sqlite`，并输出当前能力矩阵。
-- `lib/storage/supabase.ts`：完整能力后端，支持控制面、历史快照、可用性统计与 Supabase 专属诊断 / 运行时迁移。
-- `lib/storage/postgres.ts` / `lib/storage/sqlite.ts`：以控制面为主的后端，支持自动建表，但不提供历史快照、可用性统计与租约能力。
+- `lib/storage/supabase.ts`：完整能力后端，支持控制面、历史快照、可用性统计，以及 Supabase 专属诊断 / 运行时迁移。
+- `lib/storage/postgres.ts` / `lib/storage/sqlite.ts`：完整单实例后端，支持控制面、`check_history`、可用性统计聚合与自动建表；仍不提供租约选主与 Supabase 专属诊断 / 运行时迁移能力。
 
 ### 2.4 管理与诊断层
 
@@ -55,22 +55,24 @@ check_configs / request_templates / site_settings
 
 ## 3. 后端能力矩阵
 
-当前后端不是“功能完全等价”的关系，关键差异如下：
+当前后端已经能覆盖同一套单实例运行时，但仍保留少量平台专属能力差异：
 
 | 能力 | Supabase | Postgres | SQLite |
 |---|---|---|---|
 | 管理员认证 | ✅ | ✅ | ✅ |
 | 检测配置 / 模板 / 分组 / 通知 / 站点设置 | ✅ | ✅ | ✅ |
 | 自动建表（控制面） | ❌ | ✅ | ✅ |
-| 历史快照写入 | ✅ | ❌ | ❌ |
-| 可用性统计视图 | ✅ | ❌ | ❌ |
+| 历史快照写入 | ✅ | ✅ | ✅ |
+| 可用性统计 | ✅ | ✅ | ✅ |
 | 运行时迁移诊断 / 自动修复 | ✅ | ❌ | ❌ |
 | Supabase 专属诊断 | ✅ | ❌ | ❌ |
+| 可配置站点图标（favicon） | ✅ | ✅ | ✅ |
 
 因此，当前仓库的推荐理解是：
 
-- **Supabase**：完整能力后端，适合正式部署
-- **Postgres / SQLite**：优先提供控制面与管理后台能力，适合本地、自托管或轻量部署
+- **Supabase / Postgres / SQLite**：都可以承接单实例下的完整运行路径（后台管理、历史写入、可用性统计、站点图标配置）
+- **Supabase**：额外提供运行时迁移诊断 / 自动修复与 Supabase 专属诊断，适合需要这些托管能力的部署
+- **Postgres / SQLite**：更适合本地、自托管或轻量部署；切库时会导入并校验当前数据（含历史记录），但仍不是双写或 active-active
 
 ## 4. 关键数据流
 
@@ -87,9 +89,9 @@ check_configs / request_templates / site_settings
 
 ### 4.3 历史与统计
 
-- `lib/database/history.ts` 在后端具备 `historySnapshots` 能力时才会写入历史。
-- `lib/database/availability.ts` 只在具备 `availabilityStats` 能力的后端上读取统计视图。
-- 非 Supabase 后端下，这些路径会按能力矩阵主动退化，而不是假装可用。
+- `lib/database/history.ts` 通过当前活动后端的 `storage.runtime.history` 读写历史。
+- `lib/database/availability.ts` 通过当前活动后端的 `storage.runtime.availability` 读取 7/15/30 天统计。
+- 可用性统计在 Supabase、Postgres、SQLite 上都由历史记录派生；只有 Supabase 保留额外的迁移诊断 / 自动修复能力。
 
 ### 4.4 前端聚合与缓存
 
@@ -103,8 +105,8 @@ check_configs / request_templates / site_settings
 - `components/`：Dashboard、分组、后台 UI 组件
 - `lib/core/`：轮询、聚合、缓存与运行参数解析
 - `lib/providers/`：各 Provider 检查能力与请求验证
-- `lib/storage/`：后端解析、能力矩阵、控制面持久化实现
-- `lib/database/`：在能力允许时读取历史、统计与聚合数据
+- `lib/storage/`：后端解析、能力矩阵、控制面持久化实现，以及 runtime history / availability 适配层
+- `lib/database/`：对当前活动后端的历史、统计与聚合读取做统一 facade
 - `lib/admin/`：后台认证、写操作、诊断与反馈视图
 - `lib/supabase/`：Supabase 客户端与运行时迁移逻辑
 
@@ -118,6 +120,7 @@ check_configs / request_templates / site_settings
 
 - `enabled = false` 的配置不会被轮询。
 - `is_maintenance = true` 会保留卡片，但不执行真实检查。
-- 非 Supabase 后端下，不应假设历史、可用性视图和运行时迁移能力存在。
+- 非 Supabase 后端下，不应假设运行时迁移诊断 / 自动修复与 Supabase 专属诊断能力存在；但可以假设历史写入与可用性统计已经可用。
 - 容器镜像若需要支持 Supabase 运行时迁移，必须把 `supabase/migrations/` 一起打包到镜像中。
+- 站点图标通过 `app/layout.tsx` 的 `generateMetadata()` 从站点设置读取，`app/favicon.*` 不能再作为动态图标来源，否则会覆盖数据库驱动的 metadata icons。
 

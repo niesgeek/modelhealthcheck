@@ -55,6 +55,30 @@ function getBoolean(formData: FormData, key: string): boolean {
   return formData.get(key) === "on";
 }
 
+function normalizeSiteIconUrlInput(formData: FormData): string {
+  const value = getText(formData, "site_icon_url");
+  if (!value) {
+    throw new Error("站点图标地址不能为空");
+  }
+
+  if (value.startsWith("/")) {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("站点图标仅支持站内绝对路径或 http/https URL");
+    }
+    return url.toString();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("仅支持")) {
+      throw error;
+    }
+    throw new Error("站点图标仅支持站内绝对路径或 http/https URL");
+  }
+}
+
 function parseJsonRecord(formData: FormData, key: string, label: string): JsonRecord | null {
   const raw = getOptionalText(formData, key);
   if (!raw) {
@@ -474,6 +498,7 @@ export async function upsertSiteSettingsAction(formData: FormData): Promise<neve
   return handleAction(formData, "upsertSiteSettings", "站点设置已保存", async () => {
     const siteName = getText(formData, "site_name");
     const siteDescription = getText(formData, "site_description");
+    const siteIconUrl = normalizeSiteIconUrlInput(formData);
     const heroBadge = getText(formData, "hero_badge");
     const heroTitlePrimary = getText(formData, "hero_title_primary");
     const heroTitleSecondary = getText(formData, "hero_title_secondary");
@@ -501,6 +526,7 @@ export async function upsertSiteSettingsAction(formData: FormData): Promise<neve
       singleton_key: SITE_SETTINGS_SINGLETON_KEY,
       site_name: siteName,
       site_description: siteDescription,
+      site_icon_url: siteIconUrl,
       hero_badge: heroBadge,
       hero_title_primary: heroTitlePrimary,
       hero_title_secondary: heroTitleSecondary,

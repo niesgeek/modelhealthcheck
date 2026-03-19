@@ -46,6 +46,7 @@ export interface SiteSettingsMutationInput {
   singleton_key: string;
   site_name: string;
   site_description: string;
+  site_icon_url: string;
   hero_badge: string;
   hero_title_primary: string;
   hero_title_secondary: string;

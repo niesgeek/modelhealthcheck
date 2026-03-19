@@ -38,6 +38,7 @@ function normalizeSiteSettings(row?: Partial<SiteSettingsRow> | null): SiteSetti
   return {
     siteName: normalizeValue(row?.site_name, DEFAULT_SITE_SETTINGS.siteName),
     siteDescription: normalizeValue(row?.site_description, DEFAULT_SITE_SETTINGS.siteDescription),
+    siteIconUrl: normalizeValue(row?.site_icon_url, DEFAULT_SITE_SETTINGS.siteIconUrl),
     heroBadge: normalizeValue(row?.hero_badge, DEFAULT_SITE_SETTINGS.heroBadge),
     heroTitlePrimary: normalizeValue(
       row?.hero_title_primary,

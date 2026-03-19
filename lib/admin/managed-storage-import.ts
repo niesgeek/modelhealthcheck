@@ -121,13 +121,14 @@ function createSnapshotFingerprint(snapshot: ControlPlaneSnapshot): string {
       last_login_at: row.last_login_at ?? null,
     })),
     siteSettings: snapshot.siteSettings
-      ? {
-          singleton_key: snapshot.siteSettings.singleton_key,
-          site_name: snapshot.siteSettings.site_name,
-          site_description: snapshot.siteSettings.site_description,
-          hero_badge: snapshot.siteSettings.hero_badge,
-          hero_title_primary: snapshot.siteSettings.hero_title_primary,
-          hero_title_secondary: snapshot.siteSettings.hero_title_secondary,
+        ? {
+            singleton_key: snapshot.siteSettings.singleton_key,
+            site_name: snapshot.siteSettings.site_name,
+            site_description: snapshot.siteSettings.site_description,
+            site_icon_url: snapshot.siteSettings.site_icon_url,
+            hero_badge: snapshot.siteSettings.hero_badge,
+            hero_title_primary: snapshot.siteSettings.hero_title_primary,
+            hero_title_secondary: snapshot.siteSettings.hero_title_secondary,
           hero_description: snapshot.siteSettings.hero_description,
           footer_brand: snapshot.siteSettings.footer_brand,
           admin_console_title: snapshot.siteSettings.admin_console_title,

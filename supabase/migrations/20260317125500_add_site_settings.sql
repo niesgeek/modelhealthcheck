@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
   singleton_key text PRIMARY KEY DEFAULT 'global' CHECK (singleton_key = 'global'),
   site_name text NOT NULL DEFAULT '模型中转状态检测',
   site_description text NOT NULL DEFAULT '实时检测 OpenAI / Gemini / Anthropic 对话接口的可用性与延迟',
+  site_icon_url text NOT NULL DEFAULT '/favicon.png',
   hero_badge text NOT NULL DEFAULT 'System Status',
   hero_title_primary text NOT NULL DEFAULT '模型中转',
   hero_title_secondary text NOT NULL DEFAULT '状态检测',
@@ -12,6 +13,9 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
   created_at timestamptz NOT NULL DEFAULT timezone('utc', now()),
   updated_at timestamptz NOT NULL DEFAULT timezone('utc', now())
 );
+
+ALTER TABLE public.site_settings
+  ADD COLUMN IF NOT EXISTS site_icon_url text NOT NULL DEFAULT '/favicon.png';
 
 ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
 
@@ -50,6 +54,7 @@ BEGIN
         singleton_key text PRIMARY KEY DEFAULT 'global' CHECK (singleton_key = 'global'),
         site_name text NOT NULL DEFAULT '模型中转状态检测',
         site_description text NOT NULL DEFAULT '实时检测 OpenAI / Gemini / Anthropic 对话接口的可用性与延迟',
+        site_icon_url text NOT NULL DEFAULT '/favicon.png',
         hero_badge text NOT NULL DEFAULT 'System Status',
         hero_title_primary text NOT NULL DEFAULT '模型中转',
         hero_title_secondary text NOT NULL DEFAULT '状态检测',
@@ -61,6 +66,8 @@ BEGIN
         updated_at timestamptz NOT NULL DEFAULT timezone('utc', now())
       );
     $sql$;
+
+    EXECUTE 'ALTER TABLE dev.site_settings ADD COLUMN IF NOT EXISTS site_icon_url text NOT NULL DEFAULT ''/favicon.png''';
 
     EXECUTE 'ALTER TABLE dev.site_settings ENABLE ROW LEVEL SECURITY';
     EXECUTE 'DROP POLICY IF EXISTS "Allow public read site settings" ON dev.site_settings';

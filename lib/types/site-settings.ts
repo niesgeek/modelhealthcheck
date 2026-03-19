@@ -3,6 +3,7 @@ export const SITE_SETTINGS_SINGLETON_KEY = "global";
 export interface SiteSettings {
   siteName: string;
   siteDescription: string;
+  siteIconUrl: string;
   heroBadge: string;
   heroTitlePrimary: string;
   heroTitleSecondary: string;
@@ -15,6 +16,7 @@ export interface SiteSettings {
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   siteName: "模型中转状态检测",
   siteDescription: "实时检测 OpenAI / Gemini / Anthropic 对话接口的可用性与延迟",
+  siteIconUrl: "/favicon.png",
   heroBadge: "System Status",
   heroTitlePrimary: "模型中转",
   heroTitleSecondary: "状态检测",

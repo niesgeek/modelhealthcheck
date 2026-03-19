@@ -98,6 +98,25 @@ function mapRows<T extends QueryResultRow>(rows: T[] | undefined): Array<Record<
   return (rows ?? []) as Array<Record<string, unknown>>;
 }
 
+async function ensureColumnExists(pool: Pool, tableName: string, columnName: string, definition: string) {
+  const result = await pool.query<{exists: boolean}>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = $1 AND column_name = $2
+      ) AS exists
+    `,
+    [tableName, columnName]
+  );
+
+  if (result.rows[0]?.exists) {
+    return;
+  }
+
+  await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
 export function createPostgresControlPlaneStorage(connectionString: string): ControlPlaneStorage {
   const pool = getPool(connectionString);
   let readyPromise: Promise<void> | null = null;
@@ -116,6 +135,8 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
         await pool.query(statement);
       }
 
+      await ensureColumnExists(pool, "site_settings", "site_icon_url", "text NOT NULL DEFAULT '/favicon.png'");
+
       const defaults = getDefaultSiteSettingsRow();
       await pool.query(
         `
@@ -123,6 +144,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
             singleton_key,
             site_name,
             site_description,
+            site_icon_url,
             hero_badge,
             hero_title_primary,
             hero_title_secondary,
@@ -133,13 +155,14 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           ON CONFLICT (singleton_key) DO NOTHING
         `,
         [
           defaults.singleton_key,
           defaults.site_name,
           defaults.site_description,
+          defaults.site_icon_url,
           defaults.hero_badge,
           defaults.hero_title_primary,
           defaults.hero_title_secondary,
@@ -593,7 +616,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
         try {
           const result = await pool.query(
             `
-              SELECT singleton_key, site_name, site_description, hero_badge, hero_title_primary,
+              SELECT singleton_key, site_name, site_description, site_icon_url, hero_badge, hero_title_primary,
                      hero_title_secondary, hero_description, footer_brand,
                      admin_console_title, admin_console_description, created_at, updated_at
               FROM site_settings
@@ -619,6 +642,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
                 singleton_key,
                 site_name,
                 site_description,
+                site_icon_url,
                 hero_badge,
                 hero_title_primary,
                 hero_title_secondary,
@@ -629,11 +653,12 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
                 created_at,
                 updated_at
               )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
               ON CONFLICT (singleton_key)
               DO UPDATE SET
                 site_name = EXCLUDED.site_name,
                 site_description = EXCLUDED.site_description,
+                site_icon_url = EXCLUDED.site_icon_url,
                 hero_badge = EXCLUDED.hero_badge,
                 hero_title_primary = EXCLUDED.hero_title_primary,
                 hero_title_secondary = EXCLUDED.hero_title_secondary,
@@ -647,6 +672,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
               input.singleton_key,
               input.site_name,
               input.site_description,
+              input.site_icon_url,
               input.hero_badge,
               input.hero_title_primary,
               input.hero_title_secondary,

@@ -88,6 +88,20 @@ function wrapError(action: string, error: unknown): never {
   throw new Error(`${action}失败：${getErrorMessage(error)}`);
 }
 
+function ensureColumnExists(
+  db: Database.Database,
+  tableName: string,
+  columnName: string,
+  definition: string
+) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{name: string}>;
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`).run();
+}
+
 export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneStorage {
   const db = getDatabase(filePath);
   let readyPromise: Promise<void> | null = null;
@@ -107,6 +121,8 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
           db.prepare(statement).run();
         }
 
+        ensureColumnExists(db, "site_settings", "site_icon_url", "text NOT NULL DEFAULT '/favicon.png'");
+
         const defaults = getDefaultSiteSettingsRow();
         db.prepare(
           `
@@ -114,6 +130,7 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
               singleton_key,
               site_name,
               site_description,
+              site_icon_url,
               hero_badge,
               hero_title_primary,
               hero_title_secondary,
@@ -124,13 +141,14 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
               created_at,
               updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(singleton_key) DO NOTHING
           `
         ).run(
           defaults.singleton_key,
           defaults.site_name,
           defaults.site_description,
+          defaults.site_icon_url,
           defaults.hero_badge,
           defaults.hero_title_primary,
           defaults.hero_title_secondary,
@@ -566,7 +584,7 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
           const row = db
             .prepare(
               `
-                SELECT singleton_key, site_name, site_description, hero_badge, hero_title_primary,
+                SELECT singleton_key, site_name, site_description, site_icon_url, hero_badge, hero_title_primary,
                        hero_title_secondary, hero_description, footer_brand,
                        admin_console_title, admin_console_description, created_at, updated_at
                 FROM site_settings
@@ -592,6 +610,7 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
                 singleton_key,
                 site_name,
                 site_description,
+                site_icon_url,
                 hero_badge,
                 hero_title_primary,
                 hero_title_secondary,
@@ -602,10 +621,11 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
                 created_at,
                 updated_at
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(singleton_key) DO UPDATE SET
                 site_name = excluded.site_name,
                 site_description = excluded.site_description,
+                site_icon_url = excluded.site_icon_url,
                 hero_badge = excluded.hero_badge,
                 hero_title_primary = excluded.hero_title_primary,
                 hero_title_secondary = excluded.hero_title_secondary,
@@ -619,6 +639,7 @@ export function createSqliteControlPlaneStorage(filePath: string): ControlPlaneS
             input.singleton_key,
             input.site_name,
             input.site_description,
+            input.site_icon_url,
             input.hero_badge,
             input.hero_title_primary,
             input.hero_title_secondary,

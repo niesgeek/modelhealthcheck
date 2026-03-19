@@ -31,7 +31,7 @@ export default async function AdminSettingsPage({searchParams}: AdminSettingsPag
       <AdminPageIntro
         eyebrow="Admin / Settings"
         title="站点设置"
-        description="把站点名称、首页 Hero 品牌文案、footer 品牌名和后台壳子标题统一收进一处。后续你想改品牌呈现，不需要再回到代码里改常量。"
+        description="把站点名称、浏览器图标、首页 Hero 品牌文案、footer 品牌名和后台壳子标题统一收进一处。后续你想改品牌呈现，不需要再回到代码里改常量。"
       />
 
       {feedback ? <AdminStatusBanner type={feedback.type} message={feedback.message} /> : null}
@@ -40,7 +40,7 @@ export default async function AdminSettingsPage({searchParams}: AdminSettingsPag
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <AdminPanel
           title="编辑全局品牌设置"
-          description="这些设置会影响浏览器标题、首页主视觉、footer，以及后台壳子的品牌呈现。"
+          description="这些设置会影响浏览器标题与图标、首页主视觉、footer，以及后台壳子的品牌呈现。"
         >
           <form action={upsertSiteSettingsAction} className="space-y-4">
             <input type="hidden" name="returnTo" value="/admin/settings" />
@@ -91,6 +91,18 @@ export default async function AdminSettingsPage({searchParams}: AdminSettingsPag
               />
             </AdminField>
 
+            <AdminField
+              label="站点图标 URL"
+              description="支持站内绝对路径（如 /favicon.png）或外部 http/https 图标地址；保存后会用于浏览器标签页与侧栏图标。"
+            >
+              <AdminInput
+                name="site_icon_url"
+                defaultValue={settings.siteIconUrl}
+                placeholder="/favicon.png"
+                required
+              />
+            </AdminField>
+
             <AdminField label="首页 Hero 描述" description="支持换行，适合一中一英两行品牌说明。">
               <AdminTextarea
                 name="hero_description"
@@ -123,10 +135,17 @@ export default async function AdminSettingsPage({searchParams}: AdminSettingsPag
               <div className="text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground">
                 Browser Title
               </div>
-              <div className="mt-3 text-2xl font-semibold tracking-[-0.05em] text-foreground">
-                {settings.siteName}
+              <div className="mt-3 flex items-center gap-3 text-2xl font-semibold tracking-[-0.05em] text-foreground">
+                <div
+                  aria-label="站点图标预览"
+                  role="img"
+                  className="h-9 w-9 rounded-xl border border-border/40 bg-background bg-cover bg-center shadow-sm"
+                  style={{backgroundImage: `url(${settings.siteIconUrl})`}}
+                />
+                <span>{settings.siteName}</span>
               </div>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">{settings.siteDescription}</p>
+              <p className="mt-2 text-xs text-muted-foreground">当前图标：{settings.siteIconUrl}</p>
             </div>
 
             <div className="rounded-[1.75rem] border border-border/40 bg-background/70 p-5 shadow-sm">

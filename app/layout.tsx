@@ -8,12 +8,15 @@ import {loadSiteSettings} from "@/lib/site-settings";
 
 export async function generateMetadata(): Promise<Metadata> {
   const settings = await loadSiteSettings();
+  const iconUrl = settings.siteIconUrl || "/favicon.png";
 
   return {
     title: settings.siteName,
     description: settings.siteDescription,
     icons: {
-      icon: "/favicon.png",
+      icon: [{url: iconUrl}],
+      shortcut: [{url: iconUrl}],
+      apple: [{url: iconUrl}],
     },
   };
 }

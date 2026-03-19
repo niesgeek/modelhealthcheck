@@ -112,6 +112,14 @@ export function createSupabaseControlPlaneStorage(input?: {allowDraft?: boolean}
     return error.message.includes(RPC_RECENT_HISTORY) || error.message.includes(RPC_PRUNE_HISTORY);
   }
 
+  function isMissingSiteIconColumnError(error: PostgrestError | null): boolean {
+    if (!error?.message) {
+      return false;
+    }
+
+    return error.message.includes("site_icon_url");
+  }
+
   async function fallbackFetchHistoryRows(allowedIds: string[] | null, limitPerConfig?: number | null) {
     const client = createAdminClient({allowDraft});
     let query = client
@@ -461,12 +469,28 @@ export function createSupabaseControlPlaneStorage(input?: {allowDraft?: boolean}
         const {data, error} = await client
           .from("site_settings")
           .select(
-            "singleton_key, site_name, site_description, hero_badge, hero_title_primary, hero_title_secondary, hero_description, footer_brand, admin_console_title, admin_console_description, created_at, updated_at"
+            "singleton_key, site_name, site_description, site_icon_url, hero_badge, hero_title_primary, hero_title_secondary, hero_description, footer_brand, admin_console_title, admin_console_description, created_at, updated_at"
           )
           .eq("singleton_key", singletonKey)
           .maybeSingle();
 
         if (error) {
+          if (isMissingSiteIconColumnError(error)) {
+            const fallback = await client
+              .from("site_settings")
+              .select(
+                "singleton_key, site_name, site_description, hero_badge, hero_title_primary, hero_title_secondary, hero_description, footer_brand, admin_console_title, admin_console_description, created_at, updated_at"
+              )
+              .eq("singleton_key", singletonKey)
+              .maybeSingle();
+
+            if (fallback.error) {
+              wrapStorageError("读取站点设置", fallback.error);
+            }
+
+            return fallback.data ? mapSiteSettingsRow(fallback.data as Record<string, unknown>) : null;
+          }
+
           wrapStorageError("读取站点设置", error);
         }
 

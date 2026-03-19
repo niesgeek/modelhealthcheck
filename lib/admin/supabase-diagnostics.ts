@@ -622,6 +622,7 @@ export async function runSupabaseAutoFix(): Promise<SupabaseAutoFixResult> {
       singleton_key: SITE_SETTINGS_SINGLETON_KEY,
       site_name: DEFAULT_SITE_SETTINGS.siteName,
       site_description: DEFAULT_SITE_SETTINGS.siteDescription,
+      site_icon_url: DEFAULT_SITE_SETTINGS.siteIconUrl,
       hero_badge: DEFAULT_SITE_SETTINGS.heroBadge,
       hero_title_primary: DEFAULT_SITE_SETTINGS.heroTitlePrimary,
       hero_title_secondary: DEFAULT_SITE_SETTINGS.heroTitleSecondary,

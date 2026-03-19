@@ -14,6 +14,7 @@
 
 - **后台管理控制面**：新增 `/admin` 登录与管理界面，可直接在 Web UI 中维护检测配置、分组、通知、站点设置与请求模板，不再只依赖 SQL 手工维护。
 - **多存储后端支持**：除 Supabase 外，新增 SQLite 与直连 Postgres 作为控制面存储后端，支持本地 / 自建环境直接运行，并在运行时自动建表或补齐迁移。
+- **站点图标可配置**：后台站点设置现在支持自定义浏览器标签页 / 侧栏图标，支持站内绝对路径或外部 HTTPS 图标地址。
 - **存储诊断能力**：新增后台存储诊断页，可检查当前后端、迁移状态与可用性，减少环境配置不一致时的排障成本。
 - **请求模板系统增强**：新增默认请求模板种子、模板管理与 yes/no 算术挑战模板支持，方便统一复用请求头、metadata 与验证逻辑。
 - **后台登录防护**：新增管理员认证链路，并支持接入 Cloudflare Turnstile 作为登录挑战。
@@ -83,12 +84,12 @@ CHECK_CONCURRENCY=5
 ### 4. 初始化数据库 / 首次启动行为
 
 - 使用 **Supabase**：新库请先执行 `supabase/schema.sql`，再按顺序执行 `supabase/migrations/`（至少包含当前仓库新增的 `admin_users`、`site_settings` 等迁移）。如果你希望在后台管理页检查或补齐部分运行时对象，也可以使用 `/admin/storage` 中的诊断与自动修复入口。
-- 使用 **本地 / 自建 Postgres**：控制面所需表（管理员、站点设置、检测配置、请求模板、分组、通知）会在首次访问时自动创建，无需先跑 Supabase schema。
-- 使用 **SQLite**：控制面所需表会在首次访问时自动创建到 `SQLITE_DATABASE_PATH`（默认 `.sisyphus/local-data/app.db`）。
+- 使用 **本地 / 自建 Postgres**：控制面表与运行时 `check_history` 会在首次访问时自动创建，无需先跑 Supabase schema；可用性统计会基于历史记录直接聚合。
+- 使用 **SQLite**：控制面表与运行时 `check_history` 会在首次访问时自动创建到 `SQLITE_DATABASE_PATH`（默认 `.sisyphus/local-data/app.db`），可用性统计同样由历史记录派生。
 
 首次运行时，如果你没有提供 Supabase / Postgres 连接，应用会先使用 SQLite 启动，让你可以直接进入首轮 Setup Wizard / 后台初始化流程，而不是被必填 env 阻塞。后续如果要切到外部 Postgres 或 Supabase，再通过环境变量或后台 `/admin/storage` 调整即可。
 
-> 注意：只有 **Supabase** 后端提供历史快照、可用性统计视图，以及 Supabase 专属的运行时迁移诊断 / 自动修复能力；SQLite / 直连 Postgres 目前主要承载控制面读写。
+> 注意：**Supabase、直连 Postgres、SQLite 现在都会写入历史快照并生成 7/15/30 天可用性统计**。Supabase 仍然独享运行时迁移诊断 / 自动修复与 Supabase 专属诊断能力，但不再是历史与统计的唯一后端。
 
 ### 5. 添加最小配置（可选：若你不走首轮向导）
 
@@ -162,7 +163,7 @@ docker compose logs -f check-cx
 docker compose down
 ```
 
-如果你使用 Supabase 或外部 Postgres，只需要在 `.env` 中填入对应连接信息；如果远端后端变量保持为空，默认 Compose 会按当前实现自动回退到容器内持久化的 SQLite。若你希望避免首轮 SQLite 回退，可直接使用 `docker-compose.postgres.yml`。后台 `/admin/storage` 现在支持一条完整的托管切换流：保存 PostgreSQL 草稿连接、执行连通性测试、把当前控制面数据导入 PostgreSQL 侧（无论 PostgreSQL 在当前草稿中是主后端还是备用后端），然后按主/备角色启用新的存储拓扑。
+如果你使用 Supabase 或外部 Postgres，只需要在 `.env` 中填入对应连接信息；如果远端后端变量保持为空，默认 Compose 会按当前实现自动回退到容器内持久化的 SQLite。若你希望避免首轮 SQLite 回退，可直接使用 `docker-compose.postgres.yml`。后台 `/admin/storage` 现在支持一条完整的托管切换流：保存 PostgreSQL 草稿连接、执行连通性测试、把当前数据（含历史记录）导入目标后端，然后按主/备角色启用新的存储拓扑。启用前会重新校验源端与目标端快照，若导入后又产生了新历史，系统会要求重新导入而不是带着过期数据切换。
 
 > 托管主备配置会写入本地 SQLite bootstrap store（默认 `.sisyphus/local-data/storage-bootstrap.db`，可用 `STORAGE_BOOTSTRAP_SQLITE_PATH` 覆盖），不要把这个文件挂在临时磁盘上，否则重启后无法恢复已启用的主备拓扑。**一旦在后台点击“启用主备拓扑”，bootstrap store 中的激活配置会优先于纯 env 自动解析。** 当前实现只在 UI 中做掩码显示，bootstrap SQLite 文件本身仍然属于**明文凭据载体**，需要按 secret 文件管理。
 
@@ -199,7 +200,7 @@ docker compose down
 3. 否则若 `DATABASE_URL` / `POSTGRES_URL` / `POSTGRES_PRISMA_URL` / `SUPABASE_DB_URL` 任一完整，则使用 Postgres
 4. 否则回退到 SQLite，默认写入 `.sisyphus/local-data/app.db`
 
-目前 SQLite / 直连 Postgres 优先覆盖控制面路径：管理员认证、站点设置、检测配置、请求模板、分组信息和系统通知。历史快照、可用性统计与 Supabase 专属诊断能力仅在 Supabase 后端中可用；即使配置了 `Postgres primary / Supabase backup`，当前 v1 也只把主备切换定义在控制面层，不做双写或 active-active 同步。备用后端也允许显式设为 `none`，表示当前拓扑只运行单主而不配置热备用。
+SQLite / 直连 Postgres / Supabase 现在都覆盖完整的单实例运行路径：管理员认证、站点设置、检测配置、请求模板、分组信息、系统通知、历史快照写入与可用性统计。差异主要在于：Supabase 仍然提供运行时迁移检查 / 自动修复与 Supabase 专属诊断；托管主备切换会导入并校验当前数据（含历史记录），但仍然**不是双写或 active-active 同步**。备用后端也允许显式设为 `none`，表示当前拓扑只运行单主而不配置热备用。
 
 ### Provider 配置要点
 
