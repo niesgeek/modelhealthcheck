@@ -5,6 +5,10 @@ import {promisify} from "node:util";
 import {cookies, headers} from "next/headers";
 import {redirect} from "next/navigation";
 
+import {
+  ensureBootstrapAdminSessionSecret,
+  getBootstrapAdminSessionSecret,
+} from "@/lib/storage/bootstrap-store";
 import {getControlPlaneStorage} from "@/lib/storage/resolver";
 import type {AdminUserRecord} from "@/lib/storage/types";
 
@@ -27,17 +31,27 @@ interface TurnstileVerificationResult {
   [key: string]: unknown;
 }
 
-function getSessionSecret(): string {
-  const secret =
-    process.env.ADMIN_SESSION_SECRET?.trim() ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
-    "";
-
-  if (!secret) {
-    throw new Error("缺少 ADMIN_SESSION_SECRET 或 SUPABASE_SERVICE_ROLE_KEY 环境变量");
+async function getSessionSecret(input?: {createIfMissing?: boolean}): Promise<string | null> {
+  const envSecret = process.env.ADMIN_SESSION_SECRET?.trim();
+  if (envSecret) {
+    return envSecret;
   }
 
-  return secret;
+  const supabaseFallback = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (supabaseFallback) {
+    return supabaseFallback;
+  }
+
+  const bootstrapSecret = getBootstrapAdminSessionSecret();
+  if (bootstrapSecret) {
+    return bootstrapSecret;
+  }
+
+  if (input?.createIfMissing) {
+    return ensureBootstrapAdminSessionSecret();
+  }
+
+  return null;
 }
 
 function encodeBase64Url(input: string): string {
@@ -48,8 +62,13 @@ function decodeBase64Url(input: string): string {
   return Buffer.from(input, "base64url").toString("utf8");
 }
 
-function signPayload(payload: string): string {
-  return createHmac("sha256", getSessionSecret()).update(payload).digest("base64url");
+async function signPayload(payload: string, input?: {createIfMissing?: boolean}): Promise<string> {
+  const secret = await getSessionSecret(input);
+  if (!secret) {
+    throw new Error("当前无法生成管理员会话签名，请先完成初始化或配置 ADMIN_SESSION_SECRET");
+  }
+
+  return createHmac("sha256", secret).update(payload).digest("base64url");
 }
 
 function normalizeUsername(username: string): string {
@@ -110,19 +129,24 @@ export async function verifyAdminPassword(password: string, storedHash: string):
   return timingSafeEqual(derivedKey, originalKey);
 }
 
-function serializeSession(session: AdminSession): string {
+async function serializeSession(session: AdminSession): Promise<string> {
   const payload = encodeBase64Url(JSON.stringify(session));
-  const signature = signPayload(payload);
+  const signature = await signPayload(payload, {createIfMissing: true});
   return `${payload}.${signature}`;
 }
 
-function deserializeSession(cookieValue: string): AdminSession | null {
+async function deserializeSession(cookieValue: string): Promise<AdminSession | null> {
   const [payload, signature] = cookieValue.split(".");
   if (!payload || !signature) {
     return null;
   }
 
-  const expected = signPayload(payload);
+  const secret = await getSessionSecret();
+  if (!secret) {
+    return null;
+  }
+
+  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
   const expectedBuffer = Buffer.from(expected);
   const signatureBuffer = Buffer.from(signature);
 
@@ -150,7 +174,7 @@ function deserializeSession(cookieValue: string): AdminSession | null {
 
 async function setSessionCookie(session: AdminSession): Promise<void> {
   const cookieStore = await cookies();
-  cookieStore.set(ADMIN_SESSION_COOKIE, serializeSession(session), {
+  cookieStore.set(ADMIN_SESSION_COOKIE, await serializeSession(session), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",

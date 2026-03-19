@@ -427,7 +427,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
 
         try {
           if (input.id) {
-            await pool.query(
+            const updateResult = await pool.query(
               `
                 UPDATE check_configs
                 SET name = $2,
@@ -460,7 +460,10 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
                 timestamp,
               ]
             );
-            return;
+
+            if ((updateResult.rowCount ?? 0) > 0) {
+              return;
+            }
           }
 
           await pool.query(
@@ -539,7 +542,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
 
         try {
           if (input.id) {
-            await pool.query(
+            const updateResult = await pool.query(
               `
                 UPDATE check_request_templates
                 SET name = $2,
@@ -551,7 +554,10 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
               `,
               [input.id, input.name, input.type, requestHeader, metadata, timestamp]
             );
-            return;
+
+            if ((updateResult.rowCount ?? 0) > 0) {
+              return;
+            }
           }
 
           await pool.query(
@@ -624,7 +630,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
 
         try {
           if (input.id) {
-            await pool.query(
+            const updateResult = await pool.query(
               `
                 UPDATE group_info
                 SET group_name = $2,
@@ -635,7 +641,10 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
               `,
               [input.id, input.group_name, input.website_url ?? null, input.tags ?? null, timestamp]
             );
-            return;
+
+            if ((updateResult.rowCount ?? 0) > 0) {
+              return;
+            }
           }
 
           await pool.query(
@@ -706,7 +715,7 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
 
         try {
           if (input.id) {
-            await pool.query(
+            const updateResult = await pool.query(
               `
                 UPDATE system_notifications
                 SET message = $2,
@@ -716,7 +725,10 @@ export function createPostgresControlPlaneStorage(connectionString: string): Con
               `,
               [input.id, input.message, input.is_active, input.level]
             );
-            return;
+
+            if ((updateResult.rowCount ?? 0) > 0) {
+              return;
+            }
           }
 
           await pool.query(

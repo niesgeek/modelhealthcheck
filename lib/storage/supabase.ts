@@ -13,6 +13,7 @@ import type {
   StorageCapabilities,
 } from "./types";
 import {
+  createStorageId,
   getDefaultRequestTemplateRows,
   mapAdminUserRecord,
   mapCheckConfigRow,
@@ -42,7 +43,8 @@ function wrapStorageError(action: string, error: unknown): never {
   throw new Error(`${action}失败：${getErrorMessage(error)}`);
 }
 
-export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
+export function createSupabaseControlPlaneStorage(input?: {allowDraft?: boolean}): ControlPlaneStorage {
+  const allowDraft = input?.allowDraft;
   let readyPromise: Promise<void> | null = null;
 
   async function ensureReady(): Promise<void> {
@@ -51,7 +53,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     }
 
     readyPromise = (async () => {
-      const client = createAdminClient();
+      const client = createAdminClient({allowDraft});
       const {error} = await client
         .from("check_request_templates")
         .upsert(
@@ -83,7 +85,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     adminUsers: {
       async hasAny() {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client.from("admin_users").select("id").limit(1);
 
         if (error) {
@@ -94,7 +96,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async list() {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("admin_users")
           .select("id, username, password_hash, last_login_at, created_at, updated_at")
@@ -108,7 +110,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async findByUsername(username) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("admin_users")
           .select("id, username, password_hash, last_login_at, created_at, updated_at")
@@ -123,7 +125,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async create(input) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("admin_users")
           .insert({
@@ -142,7 +144,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async replaceAll(records) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data: existingRows, error: existingError} = await client
           .from("admin_users")
           .select("id");
@@ -180,7 +182,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async updateLastLoginAt(id, lastLoginAt) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {error} = await client
           .from("admin_users")
           .update({last_login_at: lastLoginAt})
@@ -194,7 +196,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     siteSettings: {
       async getSingleton(singletonKey) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("site_settings")
           .select(
@@ -211,7 +213,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async upsert(input: SiteSettingsMutationInput) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {error} = await client
           .from("site_settings")
           .upsert(input, {onConflict: "singleton_key"});
@@ -224,7 +226,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     checkConfigs: {
       async list(input) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         let query = client
           .from("check_configs")
           .select(
@@ -247,7 +249,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async getById(id) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("check_configs")
           .select(
@@ -264,8 +266,10 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async upsert(input: CheckConfigMutationInput) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
+        const payloadId = input.id ?? createStorageId();
         const payload = {
+          id: payloadId,
           name: input.name,
           type: input.type,
           model: input.model,
@@ -279,10 +283,37 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
           group_name: input.group_name ?? null,
         };
 
-        const query = input.id
-          ? client.from("check_configs").update(payload).eq("id", input.id)
-          : client.from("check_configs").insert(payload);
-        const {error} = await query;
+        let error: unknown = null;
+
+        if (input.id) {
+          const updateResult = await client
+            .from("check_configs")
+            .update({
+              name: input.name,
+              type: input.type,
+              model: input.model,
+              endpoint: input.endpoint,
+              api_key: input.api_key,
+              enabled: input.enabled,
+              is_maintenance: input.is_maintenance,
+              template_id: input.template_id ?? null,
+              request_header: input.request_header ?? null,
+              metadata: input.metadata ?? null,
+              group_name: input.group_name ?? null,
+            })
+            .eq("id", input.id)
+            .select("id");
+
+          if (updateResult.error) {
+            error = updateResult.error;
+          } else if ((updateResult.data ?? []).length === 0) {
+            const insertResult = await client.from("check_configs").insert(payload);
+            error = insertResult.error;
+          }
+        } else {
+          const insertResult = await client.from("check_configs").insert(payload);
+          error = insertResult.error;
+        }
 
         if (error) {
           wrapStorageError("保存检测配置", error);
@@ -290,7 +321,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async delete(id) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {error} = await client.from("check_configs").delete().eq("id", id);
 
         if (error) {
@@ -301,7 +332,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     requestTemplates: {
       async list() {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("check_request_templates")
           .select("id, name, type, request_header, metadata, created_at, updated_at")
@@ -316,17 +347,40 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async upsert(input: RequestTemplateMutationInput) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
+        const payloadId = input.id ?? createStorageId();
         const payload = {
+          id: payloadId,
           name: input.name,
           type: input.type,
           request_header: input.request_header ?? null,
           metadata: input.metadata ?? null,
         };
-        const query = input.id
-          ? client.from("check_request_templates").update(payload).eq("id", input.id)
-          : client.from("check_request_templates").insert(payload);
-        const {error} = await query;
+
+        let error: unknown = null;
+
+        if (input.id) {
+          const updateResult = await client
+            .from("check_request_templates")
+            .update({
+              name: input.name,
+              type: input.type,
+              request_header: input.request_header ?? null,
+              metadata: input.metadata ?? null,
+            })
+            .eq("id", input.id)
+            .select("id");
+
+          if (updateResult.error) {
+            error = updateResult.error;
+          } else if ((updateResult.data ?? []).length === 0) {
+            const insertResult = await client.from("check_request_templates").insert(payload);
+            error = insertResult.error;
+          }
+        } else {
+          const insertResult = await client.from("check_request_templates").insert(payload);
+          error = insertResult.error;
+        }
 
         if (error) {
           wrapStorageError("保存请求模板", error);
@@ -334,7 +388,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async delete(id) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {error} = await client.from("check_request_templates").delete().eq("id", id);
 
         if (error) {
@@ -345,7 +399,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     groups: {
       async list() {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("group_info")
           .select("id, group_name, website_url, tags, created_at, updated_at")
@@ -359,7 +413,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async getByName(groupName) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("group_info")
           .select("id, group_name, website_url, tags, created_at, updated_at")
@@ -374,16 +428,38 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async upsert(input: GroupMutationInput) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
+        const payloadId = input.id ?? createStorageId();
         const payload = {
+          id: payloadId,
           group_name: input.group_name,
           website_url: input.website_url ?? null,
           tags: input.tags ?? null,
         };
-        const query = input.id
-          ? client.from("group_info").update(payload).eq("id", input.id)
-          : client.from("group_info").insert(payload);
-        const {error} = await query;
+
+        let error: unknown = null;
+
+        if (input.id) {
+          const updateResult = await client
+            .from("group_info")
+            .update({
+              group_name: input.group_name,
+              website_url: input.website_url ?? null,
+              tags: input.tags ?? null,
+            })
+            .eq("id", input.id)
+            .select("id");
+
+          if (updateResult.error) {
+            error = updateResult.error;
+          } else if ((updateResult.data ?? []).length === 0) {
+            const insertResult = await client.from("group_info").insert(payload);
+            error = insertResult.error;
+          }
+        } else {
+          const insertResult = await client.from("group_info").insert(payload);
+          error = insertResult.error;
+        }
 
         if (error) {
           wrapStorageError("保存分组信息", error);
@@ -391,7 +467,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async delete(id) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {error} = await client.from("group_info").delete().eq("id", id);
 
         if (error) {
@@ -402,7 +478,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
     notifications: {
       async list() {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("system_notifications")
           .select("id, message, is_active, level, created_at")
@@ -416,7 +492,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async listActive() {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {data, error} = await client
           .from("system_notifications")
           .select("id, message, is_active, level, created_at")
@@ -431,16 +507,38 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async upsert(input: NotificationMutationInput) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
+        const payloadId = input.id ?? createStorageId();
         const payload = {
+          id: payloadId,
           message: input.message,
           level: input.level,
           is_active: input.is_active,
         };
-        const query = input.id
-          ? client.from("system_notifications").update(payload).eq("id", input.id)
-          : client.from("system_notifications").insert(payload);
-        const {error} = await query;
+
+        let error: unknown = null;
+
+        if (input.id) {
+          const updateResult = await client
+            .from("system_notifications")
+            .update({
+              message: input.message,
+              level: input.level,
+              is_active: input.is_active,
+            })
+            .eq("id", input.id)
+            .select("id");
+
+          if (updateResult.error) {
+            error = updateResult.error;
+          } else if ((updateResult.data ?? []).length === 0) {
+            const insertResult = await client.from("system_notifications").insert(payload);
+            error = insertResult.error;
+          }
+        } else {
+          const insertResult = await client.from("system_notifications").insert(payload);
+          error = insertResult.error;
+        }
 
         if (error) {
           wrapStorageError("保存系统通知", error);
@@ -448,7 +546,7 @@ export function createSupabaseControlPlaneStorage(): ControlPlaneStorage {
       },
       async delete(id) {
         await ensureReady();
-        const client = createAdminClient();
+        const client = createAdminClient({allowDraft});
         const {error} = await client.from("system_notifications").delete().eq("id", id);
 
         if (error) {

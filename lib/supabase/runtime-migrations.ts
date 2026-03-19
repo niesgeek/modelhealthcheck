@@ -6,6 +6,7 @@ import path from "node:path";
 import {Client} from "pg";
 
 import {createAdminClient} from "@/lib/supabase/admin";
+import {resolveSupabaseDirectDbUrl} from "@/lib/supabase/config";
 import {getErrorMessage, logError} from "@/lib/utils";
 
 export interface RuntimeMigrationCheck {
@@ -107,8 +108,12 @@ function getMigrationDefinitions(ids?: string[]): RuntimeMigrationDefinition[] {
 }
 
 function getMigrationConnectionState(): MigrationConnectionState {
+  const managedOrEnvSupabaseDb = resolveSupabaseDirectDbUrl();
+  if (managedOrEnvSupabaseDb) {
+    return managedOrEnvSupabaseDb;
+  }
+
   const candidates = [
-    ["SUPABASE_DB_URL", process.env.SUPABASE_DB_URL],
     ["DATABASE_URL", process.env.DATABASE_URL],
     ["POSTGRES_URL", process.env.POSTGRES_URL],
     ["POSTGRES_PRISMA_URL", process.env.POSTGRES_PRISMA_URL],
@@ -295,7 +300,7 @@ async function waitForRestRelations(
 }
 
 function buildBlockedDetail(definition: RuntimeMigrationDefinition): string {
-  return `${definition.relation} 缺失，且当前未配置可用于自动迁移的数据库直连连接串。请在 .env 中补充 SUPABASE_DB_URL（或 DATABASE_URL / POSTGRES_URL / POSTGRES_PRISMA_URL），然后重启应用。`;
+  return `${definition.relation} 缺失，且当前未配置可用于自动迁移的数据库直连连接串。请补充托管 Supabase DB URL，或在 .env 中填写 SUPABASE_DB_URL（以及 DATABASE_URL / POSTGRES_URL / POSTGRES_PRISMA_URL 之一），然后重试。`;
 }
 
 export function invalidateRuntimeMigrationCache(): void {
@@ -361,7 +366,7 @@ export async function inspectRuntimeMigrations(ids?: string[]): Promise<RuntimeM
           detail: finalProbe.blockedReason,
           hint: connectionState.connectionString
             ? `已检测到 ${connectionState.source}，但当前数据库直连预检查未通过；请先检查连接串、数据库密码、网络连通性和 SSL 要求。`
-            : "请配置 SUPABASE_DB_URL（推荐）或 DATABASE_URL / POSTGRES_URL，让项目具备直连 Postgres 执行 migration 的能力。",
+            : "请配置托管 Supabase DB URL（推荐）或 DATABASE_URL / POSTGRES_URL，让项目具备直连 Postgres 执行 migration 的能力。",
         } satisfies RuntimeMigrationCheck;
       }
 
@@ -376,7 +381,7 @@ export async function inspectRuntimeMigrations(ids?: string[]): Promise<RuntimeM
           : buildBlockedDetail(definition),
         hint: connectionState.connectionString
           ? `将执行 supabase/migrations/${definition.fileName}`
-          : "自动迁移需要直连数据库连接串；仅凭 Supabase REST URL 和 service-role key 无法执行 DDL。建议补充 SUPABASE_DB_URL 后重启。",
+          : "自动迁移需要直连数据库连接串；仅凭 Supabase REST URL 和 service-role key 无法执行 DDL。建议补充托管 Supabase DB URL 或 SUPABASE_DB_URL 后重试。",
       } satisfies RuntimeMigrationCheck;
     })
   );
@@ -454,7 +459,7 @@ export async function ensureRuntimeMigrations(input?: {
         appliedCount: 0,
         appliedItems: [],
         blockedReason:
-          "未配置 SUPABASE_DB_URL、DATABASE_URL 或 POSTGRES_URL，项目无法自动执行数据库结构迁移。",
+          "未配置托管 Supabase DB URL、SUPABASE_DB_URL、DATABASE_URL 或 POSTGRES_URL，项目无法自动执行数据库结构迁移。",
         connectionSource: null,
       };
     }

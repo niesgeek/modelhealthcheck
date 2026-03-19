@@ -135,12 +135,14 @@ SQLite 与直连 Postgres 一样，优先承担控制面读写；首次访问会
 
 ### 4.2 Docker Compose
 
-- 仓库根目录提供默认镜像版 `docker-compose.yml`，以及本地源码构建覆盖文件 `docker-compose.build.yml`
+- 仓库根目录提供默认镜像版 `docker-compose.yml`、一键拉起 `应用 + PostgreSQL` 的 `docker-compose.postgres.yml`，以及本地源码构建覆盖文件 `docker-compose.build.yml`
 - 默认 `docker compose up -d` 会拉取 `ghcr.io/arron196/modelhealthcheck:latest`（也可通过 `CHECK_CX_IMAGE` 覆盖）
+- `docker compose -f docker-compose.postgres.yml up -d` 同样默认拉取 GHCR 镜像，但会额外创建一个本地 PostgreSQL 16 容器，并把应用固定到直连 Postgres
 - 如果你要本地构建当前仓库，请显式叠加 `docker-compose.build.yml`
 - 当前 GitHub Actions 默认发布的是 `linux/amd64` 镜像；ARM 主机如需直接运行 GHCR 镜像，请改用自建多架构 tag 或本地构建覆盖
 - 若远端后端环境变量为空，容器会自动回退到 `/app/.sisyphus/local-data/app.db`
 - `check-cx-data` 命名卷负责持久化 SQLite 文件
+- `check-cx-postgres-data` 命名卷负责持久化 `docker-compose.postgres.yml` 中 PostgreSQL 容器的数据目录
 
 默认镜像启动：
 
@@ -150,13 +152,32 @@ docker compose pull
 docker compose up -d
 ```
 
+这个默认路径适合新的首轮部署模型：即使你暂时不填 Supabase / Postgres 连接，也可以先让应用启动，再通过首轮 Setup Wizard 或后台初始化流程完成配置。
+
+应用 + PostgreSQL 一键启动：
+
+```bash
+docker compose -f docker-compose.postgres.yml up -d
+```
+
+该变体会直接把控制面落到 Compose 内置的 PostgreSQL，而不是先走 SQLite 回退。
+
 本地源码构建覆盖：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
+如需把 `应用 + PostgreSQL` 变体改为本地构建镜像：
+
+```bash
+docker compose -f docker-compose.postgres.yml -f docker-compose.build.yml up -d --build
+```
+
 ### 4.3 镜像运行注意事项
+
+- 默认 `docker-compose.yml` 仍然是推荐的 GHCR 镜像入口；新增 `docker-compose.postgres.yml` 只是为“首次部署就要内置 PostgreSQL”的场景提供一键选项
+- 首轮 Setup Wizard / 后台初始化流程不再要求先把所有数据库 env 填完：默认镜像路径会先用持久化 SQLite 启动，PostgreSQL 变体则会直接提供可用的本地数据库
 
 - 当前运行时迁移逻辑只会读取 `RUNTIME_MIGRATIONS` 列出的特定迁移文件，文件本体位于 `supabase/migrations/`
 - 因此 Docker 镜像必须把 `supabase/migrations/` 一起打包进去，才能在容器内执行 Supabase 运行时迁移检查 / 自动修复

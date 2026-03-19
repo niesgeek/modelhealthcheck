@@ -10,7 +10,9 @@
 import "server-only";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
-const DB_SCHEMA = process.env.SUPABASE_DB_SCHEMA?.trim() || "public";
+import {getSupabaseDbSchema, resolveSupabaseConfig} from "@/lib/supabase/config";
+
+const DB_SCHEMA = getSupabaseDbSchema();
 
 /**
  * 创建管理员客户端（绕过 RLS）
@@ -18,17 +20,18 @@ const DB_SCHEMA = process.env.SUPABASE_DB_SCHEMA?.trim() || "public";
  * 注意：此客户端使用 service_role key，拥有完整的数据库访问权限
  * 仅应在服务端后台任务中使用
  */
-export function createAdminClient() {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+export function createAdminClient(input?: {allowDraft?: boolean}) {
+  const config = resolveSupabaseConfig({allowDraft: input?.allowDraft});
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!config) {
     throw new Error(
-      "缺少 SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY 环境变量"
+      input?.allowDraft
+        ? "缺少可用的 Supabase URL 或 service-role key（环境变量或托管草稿均未配置）"
+        : "缺少可用的 Supabase URL 或 service-role key（环境变量或已启用托管配置均未配置）"
     );
   }
 
-  return createSupabaseClient(supabaseUrl, serviceRoleKey, {
+  return createSupabaseClient(config.url, config.serviceRoleKey, {
     db: { schema: DB_SCHEMA },
     auth: {
       autoRefreshToken: false,

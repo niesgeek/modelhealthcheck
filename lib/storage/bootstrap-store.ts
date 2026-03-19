@@ -1,5 +1,6 @@
 import "server-only";
 
+import {randomBytes} from "node:crypto";
 import {mkdirSync} from "node:fs";
 import path from "node:path";
 
@@ -16,11 +17,14 @@ const BOOTSTRAP_SINGLETON_ID = "global";
 
 export type ManagedStorageProvider = "supabase" | "postgres";
 export type ManagedStorageBackupProvider = ManagedStorageProvider | "none";
+export type ManagedStorageImportSourceProvider = ManagedStorageProvider | "sqlite";
 
 export interface ManagedStorageImportSummary {
   importedAt: string;
-  sourceProvider: ManagedStorageProvider;
+  sourceProvider: ManagedStorageImportSourceProvider;
   targetProvider: ManagedStorageProvider;
+  sourceFingerprint: string;
+  targetFingerprint: string;
   counts: {
     adminUsers: number;
     checkConfigs: number;
@@ -32,8 +36,16 @@ export interface ManagedStorageImportSummary {
 }
 
 export interface ManagedStorageSettings {
+  adminSessionSecretConfigured: boolean;
   postgresConnectionString: string | null;
   postgresConnectionMasked: string | null;
+  supabaseUrl: string | null;
+  supabaseProjectHost: string | null;
+  supabasePublishableKeyMasked: string | null;
+  supabaseServiceRoleKeyMasked: string | null;
+  supabaseDbUrlMasked: string | null;
+  hasSupabaseAdminCredentials: boolean;
+  hasSupabasePublicCredentials: boolean;
   postgresTestReport: PostgresConnectionTestReport | null;
   postgresLastTestedAt: string | null;
   postgresLastTestOk: boolean;
@@ -50,7 +62,12 @@ export interface ManagedStorageSettings {
 
 interface ManagedStorageRow {
   id: string;
+  admin_session_secret: string | null;
   postgres_connection_string: string | null;
+  supabase_url: string | null;
+  supabase_publishable_key: string | null;
+  supabase_service_role_key: string | null;
+  supabase_db_url: string | null;
   postgres_test_report: string | null;
   postgres_last_tested_at: string | null;
   postgres_last_test_ok: number;
@@ -98,7 +115,12 @@ function getBootstrapDb(): Database.Database {
   db.exec(`
     CREATE TABLE IF NOT EXISTS managed_storage_settings (
       id text PRIMARY KEY,
+      admin_session_secret text,
       postgres_connection_string text,
+      supabase_url text,
+      supabase_publishable_key text,
+      supabase_service_role_key text,
+      supabase_db_url text,
       postgres_test_report text,
       postgres_last_tested_at text,
       postgres_last_test_ok integer NOT NULL DEFAULT 0,
@@ -114,8 +136,23 @@ function getBootstrapDb(): Database.Database {
     )
   `);
 
+  ensureColumn(db, "managed_storage_settings", "admin_session_secret", "ALTER TABLE managed_storage_settings ADD COLUMN admin_session_secret text");
+  ensureColumn(db, "managed_storage_settings", "supabase_url", "ALTER TABLE managed_storage_settings ADD COLUMN supabase_url text");
+  ensureColumn(db, "managed_storage_settings", "supabase_publishable_key", "ALTER TABLE managed_storage_settings ADD COLUMN supabase_publishable_key text");
+  ensureColumn(db, "managed_storage_settings", "supabase_service_role_key", "ALTER TABLE managed_storage_settings ADD COLUMN supabase_service_role_key text");
+  ensureColumn(db, "managed_storage_settings", "supabase_db_url", "ALTER TABLE managed_storage_settings ADD COLUMN supabase_db_url text");
+
   bootstrapDbCache = {filePath, db};
   return db;
+}
+
+function ensureColumn(db: Database.Database, tableName: string, columnName: string, statement: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{name: string}>;
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.exec(statement);
 }
 
 function parseJson<T>(value: string | null): T | null {
@@ -150,6 +187,30 @@ function maskConnectionString(connectionString: string | null): string | null {
   }
 }
 
+function maskSecret(secret: string | null): string | null {
+  if (!secret) {
+    return null;
+  }
+
+  if (secret.length <= 8) {
+    return `${secret[0] ?? ""}***`;
+  }
+
+  return `${secret.slice(0, 4)}***${secret.slice(-4)}`;
+}
+
+function getProjectHost(url: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
 function ensureSingletonRow(): ManagedStorageRow {
   const db = getBootstrapDb();
   const existing = db
@@ -181,8 +242,16 @@ function ensureSingletonRow(): ManagedStorageRow {
 
 function mapRow(row: ManagedStorageRow): ManagedStorageSettings {
   return {
+    adminSessionSecretConfigured: Boolean(row.admin_session_secret),
     postgresConnectionString: row.postgres_connection_string,
     postgresConnectionMasked: maskConnectionString(row.postgres_connection_string),
+    supabaseUrl: row.supabase_url,
+    supabaseProjectHost: getProjectHost(row.supabase_url),
+    supabasePublishableKeyMasked: maskSecret(row.supabase_publishable_key),
+    supabaseServiceRoleKeyMasked: maskSecret(row.supabase_service_role_key),
+    supabaseDbUrlMasked: maskConnectionString(row.supabase_db_url),
+    hasSupabaseAdminCredentials: Boolean(row.supabase_url && row.supabase_service_role_key),
+    hasSupabasePublicCredentials: Boolean(row.supabase_url && row.supabase_publishable_key),
     postgresTestReport: parseJson<PostgresConnectionTestReport>(row.postgres_test_report),
     postgresLastTestedAt: row.postgres_last_tested_at,
     postgresLastTestOk: toBool(row.postgres_last_test_ok),
@@ -220,19 +289,38 @@ export function loadManagedStorageSettings(): ManagedStorageSettings {
 
 export function updateManagedStorageDraft(input: {
   postgresConnectionString: string;
+  supabaseUrl: string;
+  supabasePublishableKey: string;
+  supabaseServiceRoleKey: string;
+  supabaseDbUrl: string;
   draftPrimaryProvider: ManagedStorageProvider;
   draftBackupProvider: ManagedStorageBackupProvider;
 }): ManagedStorageSettings {
-  const current = loadManagedStorageSettings();
-  const nextConnectionString = input.postgresConnectionString.trim() || current.postgresConnectionString;
+  const currentRow = ensureSingletonRow();
+  const current = mapRow(currentRow);
+  const nextConnectionString = input.postgresConnectionString.trim() || currentRow.postgres_connection_string;
+  const nextSupabaseUrl = input.supabaseUrl.trim() || currentRow.supabase_url;
+  const nextSupabasePublishableKey =
+    input.supabasePublishableKey.trim() || currentRow.supabase_publishable_key;
+  const nextSupabaseServiceRoleKey =
+    input.supabaseServiceRoleKey.trim() || currentRow.supabase_service_role_key;
+  const nextSupabaseDbUrl = input.supabaseDbUrl.trim() || currentRow.supabase_db_url;
   const shouldResetReadiness =
     nextConnectionString !== current.postgresConnectionString ||
+    nextSupabaseUrl !== currentRow.supabase_url ||
+    nextSupabasePublishableKey !== currentRow.supabase_publishable_key ||
+    nextSupabaseServiceRoleKey !== currentRow.supabase_service_role_key ||
+    nextSupabaseDbUrl !== currentRow.supabase_db_url ||
     input.draftPrimaryProvider !== current.draftPrimaryProvider ||
     input.draftBackupProvider !== current.draftBackupProvider;
   touchUpdate(
     `
       UPDATE managed_storage_settings
       SET postgres_connection_string = ?,
+          supabase_url = ?,
+          supabase_publishable_key = ?,
+          supabase_service_role_key = ?,
+          supabase_db_url = ?,
           postgres_test_report = ?,
           postgres_last_tested_at = ?,
           postgres_last_test_ok = ?,
@@ -245,6 +333,10 @@ export function updateManagedStorageDraft(input: {
     `,
     [
       nextConnectionString,
+      nextSupabaseUrl,
+      nextSupabasePublishableKey,
+      nextSupabaseServiceRoleKey,
+      nextSupabaseDbUrl,
       shouldResetReadiness ? null : JSON.stringify(current.postgresTestReport),
       shouldResetReadiness ? null : current.postgresLastTestedAt,
       shouldResetReadiness ? 0 : current.postgresLastTestOk ? 1 : 0,
@@ -292,6 +384,21 @@ export function recordManagedStorageImportResult(input: {
   return loadManagedStorageSettings();
 }
 
+export function resetManagedStorageImportState(): ManagedStorageSettings {
+  touchUpdate(
+    `
+      UPDATE managed_storage_settings
+      SET last_import_summary = ?,
+          last_import_ok = ?,
+          updated_at = ?
+      WHERE id = ?
+    `,
+    [null, 0]
+  );
+
+  return loadManagedStorageSettings();
+}
+
 export function activateManagedStorageDraft(): ManagedStorageSettings {
   const current = loadManagedStorageSettings();
   const nextGeneration = current.activationGeneration + 1;
@@ -321,9 +428,14 @@ export function getManagedStorageRuntimeOverride(): {
   primaryProvider: ManagedStorageProvider;
   backupProvider: ManagedStorageBackupProvider;
   postgresConnectionString: string | null;
+  supabaseUrl: string | null;
+  supabasePublishableKey: string | null;
+  supabaseServiceRoleKey: string | null;
+  supabaseDbUrl: string | null;
   activationGeneration: number;
 } | null {
-  const settings = loadManagedStorageSettings();
+  const row = ensureSingletonRow();
+  const settings = mapRow(row);
   if (!settings.activePrimaryProvider) {
     return null;
   }
@@ -332,8 +444,52 @@ export function getManagedStorageRuntimeOverride(): {
     primaryProvider: settings.activePrimaryProvider,
     backupProvider: settings.activeBackupProvider,
     postgresConnectionString: settings.postgresConnectionString,
+    supabaseUrl: row.supabase_url,
+    supabasePublishableKey: row.supabase_publishable_key,
+    supabaseServiceRoleKey: row.supabase_service_role_key,
+    supabaseDbUrl: row.supabase_db_url,
     activationGeneration: settings.activationGeneration,
   };
+}
+
+export function getManagedSupabaseDraftConfig(): {
+  url: string | null;
+  publishableKey: string | null;
+  serviceRoleKey: string | null;
+  dbUrl: string | null;
+} {
+  const row = ensureSingletonRow();
+
+  return {
+    url: row.supabase_url,
+    publishableKey: row.supabase_publishable_key,
+    serviceRoleKey: row.supabase_service_role_key,
+    dbUrl: row.supabase_db_url,
+  };
+}
+
+export function getBootstrapAdminSessionSecret(): string | null {
+  return ensureSingletonRow().admin_session_secret;
+}
+
+export function ensureBootstrapAdminSessionSecret(): string {
+  const existing = getBootstrapAdminSessionSecret();
+  if (existing) {
+    return existing;
+  }
+
+  const generated = randomBytes(32).toString("base64url");
+  touchUpdate(
+    `
+      UPDATE managed_storage_settings
+      SET admin_session_secret = ?,
+          updated_at = ?
+      WHERE id = ?
+    `,
+    [generated]
+  );
+
+  return generated;
 }
 
 export function hasManagedSupabaseBackupConfigured(): boolean {

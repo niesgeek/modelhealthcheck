@@ -4,6 +4,11 @@ import {createClient as createSupabaseClient} from "@supabase/supabase-js";
 
 import {DEFAULT_SITE_SETTINGS, SITE_SETTINGS_SINGLETON_KEY} from "@/lib/types/site-settings";
 import {createAdminClient} from "@/lib/supabase/admin";
+import {
+  getSupabaseDbSchema,
+  resolveSupabaseConfig,
+  resolveSupabasePublicConfig,
+} from "@/lib/supabase/config";
 import {ensureRuntimeMigrations, inspectRuntimeMigrations, type RuntimeMigrationCheck} from "@/lib/supabase/runtime-migrations";
 import {getErrorMessage} from "@/lib/utils";
 
@@ -89,7 +94,7 @@ interface DiagnosticClient {
   };
 }
 
-const DB_SCHEMA = process.env.SUPABASE_DB_SCHEMA?.trim() || "public";
+const DB_SCHEMA = getSupabaseDbSchema();
 
 const PUBLIC_RELATIONS: RelationManifestItem[] = [
   {
@@ -236,9 +241,11 @@ function isAuthLikeError(message: string): boolean {
 }
 
 function buildEnvironmentChecks(): SupabaseDiagnosticCheck[] {
-  const supabaseUrl = process.env.SUPABASE_URL?.trim() || "";
-  const publicKey = process.env.SUPABASE_PUBLISHABLE_OR_ANON_KEY?.trim() || "";
-  const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
+  const adminConfig = resolveSupabaseConfig();
+  const publicConfig = resolveSupabasePublicConfig();
+  const supabaseUrl = adminConfig?.url ?? "";
+  const publicKey = publicConfig?.key ?? "";
+  const adminKey = adminConfig?.serviceRoleKey ?? "";
   const publicKeyKind = getKeyKind(publicKey);
   const adminKeyKind = getKeyKind(adminKey);
   const urlHost = getProjectHost(supabaseUrl);
@@ -250,7 +257,9 @@ function buildEnvironmentChecks(): SupabaseDiagnosticCheck[] {
     label: "SUPABASE_URL",
     scope: "shared",
     status: urlHost ? "pass" : "fail",
-    detail: urlHost ? `项目地址已配置：${urlHost}` : "缺少或不是合法的 HTTPS Supabase URL",
+    detail: urlHost
+      ? `项目地址已配置：${urlHost}（来源：${adminConfig?.source ?? "unknown"}）`
+      : "缺少或不是合法的 HTTPS Supabase URL",
     hint: urlHost ? undefined : "请确认 SUPABASE_URL 指向正确的 Supabase 项目地址",
   });
 
@@ -268,7 +277,7 @@ function buildEnvironmentChecks(): SupabaseDiagnosticCheck[] {
             : "pass",
     detail: !publicKey
       ? "未配置 public / anon key"
-      : `已配置，类型判断为 ${publicKeyKind}，值 ${maskValue(publicKey)}`,
+      : `已配置，类型判断为 ${publicKeyKind}，值 ${maskValue(publicKey)}（来源：${publicConfig?.source ?? "unknown"}）`,
     hint: !publicKey
       ? "公开链路和 SSR 客户端需要这个 key"
       : publicKeyKind === "secret" || publicKeyKind === "service-role-jwt"
@@ -290,7 +299,7 @@ function buildEnvironmentChecks(): SupabaseDiagnosticCheck[] {
             : "pass",
     detail: !adminKey
       ? "未配置 service-role / secret key"
-      : `已配置，类型判断为 ${adminKeyKind}，值 ${maskValue(adminKey)}`,
+      : `已配置，类型判断为 ${adminKeyKind}，值 ${maskValue(adminKey)}（来源：${adminConfig?.source ?? "unknown"}）`,
     hint: !adminKey
       ? "后台管理、轮询和管理端写操作都依赖这个 key"
       : adminKeyKind === "publishable" || adminKeyKind === "anon-jwt"
@@ -314,14 +323,13 @@ function buildEnvironmentChecks(): SupabaseDiagnosticCheck[] {
 }
 
 function createPublicDiagnosticClient() {
-  const supabaseUrl = process.env.SUPABASE_URL?.trim();
-  const publicKey = process.env.SUPABASE_PUBLISHABLE_OR_ANON_KEY?.trim();
+  const publicConfig = resolveSupabasePublicConfig();
 
-  if (!supabaseUrl || !publicKey) {
+  if (!publicConfig) {
     throw new Error("缺少 SUPABASE_URL 或 SUPABASE_PUBLISHABLE_OR_ANON_KEY 环境变量");
   }
 
-  return createSupabaseClient(supabaseUrl, publicKey, {
+  return createSupabaseClient(publicConfig.url, publicConfig.key, {
     db: {schema: DB_SCHEMA},
     auth: {
       autoRefreshToken: false,
@@ -672,7 +680,7 @@ export async function runSupabaseDiagnostics(): Promise<SupabaseDiagnosticsRepor
 
   return {
     generatedAt: new Date().toISOString(),
-    projectHost: getProjectHost(process.env.SUPABASE_URL?.trim() || null),
+    projectHost: getProjectHost(resolveSupabaseConfig()?.url ?? null),
     schema: DB_SCHEMA,
     ok: failCount === 0,
     passCount,

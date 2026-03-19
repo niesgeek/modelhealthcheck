@@ -1,11 +1,12 @@
 import {
   activateManagedStorageAction,
-  importManagedPostgresAction,
+  importManagedStorageAction,
   saveManagedStorageDraftAction,
   testManagedPostgresAction,
 } from "@/app/admin/actions";
 import {
   AdminField,
+  AdminInput,
   AdminPanel,
   AdminSelect,
   AdminStatCard,
@@ -41,7 +42,25 @@ export function ManagedStoragePanel() {
           <AdminStatCard
             label="导入状态"
             value={settings.lastImportOk ? "READY" : "PENDING"}
-            helper={settings.lastImportSummary?.importedAt ?? "尚未导入控制面数据"}
+            helper={
+              settings.lastImportSummary
+                ? `${settings.lastImportSummary.targetProvider} @ ${settings.lastImportSummary.importedAt}`
+                : "尚未导入控制面数据"
+            }
+          />
+          <AdminStatCard
+            label="Supabase 凭据"
+            value={settings.hasSupabaseAdminCredentials ? "READY" : "OPTIONAL"}
+            helper={settings.supabaseProjectHost ?? "尚未保存托管 Supabase 项目"}
+          />
+          <AdminStatCard
+            label="Admin 会话密钥"
+            value={settings.adminSessionSecretConfigured ? "READY" : "AUTO"}
+            helper={
+              settings.adminSessionSecretConfigured
+                ? "已保存在 bootstrap store 中"
+                : "首次创建管理员时会自动生成"
+            }
           />
         </div>
 
@@ -91,6 +110,73 @@ export function ManagedStoragePanel() {
             />
           </AdminField>
 
+          <div className="grid gap-4 md:grid-cols-2">
+            <AdminField
+              label="Supabase URL"
+              description={
+                settings.supabaseProjectHost
+                  ? `已保存项目：${settings.supabaseProjectHost}。若本次不想修改，可留空以保留现值。`
+                  : "用于 Supabase 主后端或备用后端的项目地址。"
+              }
+            >
+              <AdminInput
+                name="supabase_url"
+                type="url"
+                placeholder="https://your-project.supabase.co"
+                defaultValue=""
+              />
+            </AdminField>
+
+            <AdminField
+              label="Supabase 直连 DB URL"
+              description={
+                settings.supabaseDbUrlMasked
+                  ? `已保存直连连接：${settings.supabaseDbUrlMasked}。留空可保留现值。`
+                  : "可选。填入后可启用运行时迁移与更完整的数据库诊断。"
+              }
+            >
+              <AdminInput
+                name="supabase_db_url"
+                placeholder="postgresql://postgres:password@db.host:5432/postgres"
+                defaultValue=""
+              />
+            </AdminField>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <AdminField
+              label="Supabase public / anon key"
+              description={
+                settings.supabasePublishableKeyMasked
+                  ? `已保存公开 key：${settings.supabasePublishableKeyMasked}。留空可保留现值。`
+                  : "可选。主要用于 public / SSR 诊断链路，不影响服务端 control-plane 写入。"
+              }
+            >
+              <AdminTextarea
+                name="supabase_publishable_or_anon_key"
+                placeholder="sb_publishable_xxx 或 anon JWT"
+                defaultValue=""
+                className="min-h-[110px]"
+              />
+            </AdminField>
+
+            <AdminField
+              label="Supabase service-role key"
+              description={
+                settings.supabaseServiceRoleKeyMasked
+                  ? `已保存管理 key：${settings.supabaseServiceRoleKeyMasked}。留空可保留现值。`
+                  : "必填于托管 Supabase 流程；后台管理、导入和诊断都依赖这个 key。"
+              }
+            >
+              <AdminTextarea
+                name="supabase_service_role_key"
+                placeholder="sb_secret_xxx 或 service-role JWT"
+                defaultValue=""
+                className="min-h-[110px]"
+              />
+            </AdminField>
+          </div>
+
           <div className="flex flex-wrap gap-3">
             <Button type="submit" formAction={saveManagedStorageDraftAction} className="rounded-full">
               保存草稿
@@ -98,8 +184,8 @@ export function ManagedStoragePanel() {
             <Button type="submit" formAction={testManagedPostgresAction} variant="outline" className="rounded-full">
               测试 PostgreSQL 连接
             </Button>
-            <Button type="submit" formAction={importManagedPostgresAction} variant="outline" className="rounded-full">
-              导入当前控制面到 PostgreSQL 侧
+            <Button type="submit" formAction={importManagedStorageAction} variant="outline" className="rounded-full">
+              导入当前控制面到目标后端
             </Button>
             <Button type="submit" formAction={activateManagedStorageAction} className="rounded-full">
               启用主备拓扑

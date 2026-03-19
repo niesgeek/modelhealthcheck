@@ -11,7 +11,7 @@ import {
   requireAdminSession,
   verifyTurnstile,
 } from "@/lib/admin/auth";
-import {importControlPlaneToTarget} from "@/lib/admin/managed-storage-import";
+import {importControlPlaneToTarget, verifyManagedStorageImport} from "@/lib/admin/managed-storage-import";
 import {runPostgresConnectionDiagnostics} from "@/lib/admin/postgres-connection-diagnostics";
 import {runSupabaseAutoFix} from "@/lib/admin/supabase-diagnostics";
 import {ADMIN_NOTIFICATION_LEVELS, ADMIN_PROVIDER_TYPES} from "@/lib/admin/data";
@@ -24,9 +24,11 @@ import {
   activateManagedStorageDraft,
   recordManagedPostgresTestReport,
   recordManagedStorageImportResult,
+  resetManagedStorageImportState,
   updateManagedStorageDraft,
 } from "@/lib/storage/bootstrap-store";
 import {getControlPlaneStorage, resetStorageResolverCaches} from "@/lib/storage/resolver";
+import {createSupabaseControlPlaneStorage} from "@/lib/storage/supabase";
 import {ensureRuntimeMigrations, invalidateRuntimeMigrationCache} from "@/lib/supabase/runtime-migrations";
 import {normalizeProviderEndpoint} from "@/lib/providers/endpoint-utils";
 import {getErrorMessage, logError} from "@/lib/utils";
@@ -103,6 +105,10 @@ function ensureManagedStorageBackupProvider(
 
 function readManagedStorageDraft(formData: FormData): {
   postgresConnectionString: string;
+  supabaseUrl: string;
+  supabasePublishableKey: string;
+  supabaseServiceRoleKey: string;
+  supabaseDbUrl: string;
   draftPrimaryProvider: ManagedStorageProvider;
   draftBackupProvider: ManagedStorageBackupProvider;
 } {
@@ -117,9 +123,22 @@ function readManagedStorageDraft(formData: FormData): {
 
   return {
     postgresConnectionString: getText(formData, "postgres_connection_string"),
+    supabaseUrl: getText(formData, "supabase_url"),
+    supabasePublishableKey: getText(formData, "supabase_publishable_or_anon_key"),
+    supabaseServiceRoleKey: getText(formData, "supabase_service_role_key"),
+    supabaseDbUrl: getText(formData, "supabase_db_url"),
     draftPrimaryProvider,
     draftBackupProvider,
   };
+}
+
+function resolveManagedImportTarget(draft: {
+  draftPrimaryProvider: ManagedStorageProvider;
+  draftBackupProvider: ManagedStorageBackupProvider;
+}): ManagedStorageProvider {
+  return draft.draftPrimaryProvider === "postgres" || draft.draftBackupProvider === "postgres"
+    ? "postgres"
+    : "supabase";
 }
 
 function buildRedirectUrl(
@@ -226,7 +245,13 @@ export async function bootstrapAdminAction(formData: FormData): Promise<never> {
       password: getPasswordConfirmation(formData),
     });
     revalidateAdminPaths("/admin");
-    redirect("/admin");
+    redirect(
+      buildRedirectUrl(
+        "/admin/storage",
+        "success",
+        "首个管理员已创建。现在可以保留 SQLite，或继续配置 PostgreSQL / Supabase。"
+      )
+    );
   } catch (error) {
     if (isRedirectError(error)) {
       throw error;
@@ -308,13 +333,10 @@ export async function testManagedPostgresAction(formData: FormData): Promise<nev
   });
 }
 
-export async function importManagedPostgresAction(formData: FormData): Promise<never> {
-  return handleAction(formData, "importManagedPostgres", "控制面数据已导入目标主后端", async () => {
+export async function importManagedStorageAction(formData: FormData): Promise<never> {
+  return handleAction(formData, "importManagedStorage", "控制面数据已导入目标后端", async () => {
     const draft = updateManagedStorageDraft(readManagedStorageDraft(formData));
-    const targetProvider =
-      draft.draftPrimaryProvider === "postgres" || draft.draftBackupProvider === "postgres"
-        ? "postgres"
-        : "supabase";
+    const targetProvider = resolveManagedImportTarget(draft);
 
     if (targetProvider === "postgres" && !draft.postgresConnectionString) {
       throw new Error("缺少 PostgreSQL 连接串，无法导入");
@@ -322,8 +344,12 @@ export async function importManagedPostgresAction(formData: FormData): Promise<n
     if (targetProvider === "postgres" && !draft.postgresLastTestOk) {
       throw new Error("请先完成并通过 PostgreSQL 连接测试");
     }
+    if (targetProvider === "supabase" && !draft.hasSupabaseAdminCredentials) {
+      throw new Error("请先填写 Supabase URL 与 service-role key，再执行导入");
+    }
 
     const sourceStorage = await getControlPlaneStorage();
+    resetManagedStorageImportState();
     const summary = await importControlPlaneToTarget({
       sourceStorage,
       targetProvider,
@@ -336,14 +362,27 @@ export async function importManagedPostgresAction(formData: FormData): Promise<n
 export async function activateManagedStorageAction(formData: FormData): Promise<never> {
   return handleAction(formData, "activateManagedStorage", "托管存储配置已启用", async () => {
     const draft = updateManagedStorageDraft(readManagedStorageDraft(formData));
+    const currentStorage = await getControlPlaneStorage();
+    const importTargetProvider = resolveManagedImportTarget(draft);
 
     const usesSupabase =
       draft.draftPrimaryProvider === "supabase" || draft.draftBackupProvider === "supabase";
+    if (usesSupabase && !draft.hasSupabaseAdminCredentials) {
+      throw new Error("请先填写 Supabase URL 与 service-role key，才能把 Supabase 设为主后端或备用后端");
+    }
+    if (usesSupabase) {
+      const supabaseStorage = createSupabaseControlPlaneStorage({allowDraft: true});
+      await supabaseStorage.ensureReady();
+    }
+
     if (
-      usesSupabase &&
-      (!process.env.SUPABASE_URL?.trim() || !process.env.SUPABASE_SERVICE_ROLE_KEY?.trim())
+      draft.draftPrimaryProvider === "supabase" &&
+      importTargetProvider === "postgres" &&
+      currentStorage.provider !== "supabase"
     ) {
-      throw new Error("当前没有可用的 Supabase 环境变量，无法把 Supabase 设为主后端或备用后端");
+      throw new Error(
+        "当前初始化流程还不能在一次启用中同时把现有控制面导入到 Supabase 主库并预热 PostgreSQL 备用库。请先把主后端设为 Supabase（备用后端设为 none）完成导入与启用，随后再把 PostgreSQL 配成备用后端。"
+      );
     }
 
     const usesPostgres =
@@ -357,6 +396,35 @@ export async function activateManagedStorageAction(formData: FormData): Promise<
       }
       if (!draft.lastImportOk) {
         throw new Error("请先把当前控制面数据导入 PostgreSQL，再执行启用");
+      }
+    }
+
+    if (importTargetProvider === "supabase" && currentStorage.provider !== "supabase") {
+      if (!draft.lastImportOk || draft.lastImportSummary?.targetProvider !== "supabase") {
+        throw new Error("请先把当前控制面数据导入 Supabase，再执行启用");
+      }
+    }
+
+    if (importTargetProvider === "postgres" && currentStorage.provider !== "postgres") {
+      if (!draft.lastImportOk || draft.lastImportSummary?.targetProvider !== "postgres") {
+        throw new Error("请先把当前控制面数据导入 PostgreSQL，再执行启用");
+      }
+    }
+
+    if (draft.lastImportSummary) {
+      const verification = await verifyManagedStorageImport({
+        sourceStorage: currentStorage,
+        targetProvider: importTargetProvider,
+        postgresConnectionString: draft.postgresConnectionString,
+        summary: draft.lastImportSummary,
+      });
+
+      if (!verification.sourceMatchesImport) {
+        throw new Error("导入完成后源控制面数据已发生变化，请重新导入后再执行启用，避免切换到过期数据");
+      }
+
+      if (!verification.targetMatchesImport) {
+        throw new Error("目标后端数据与最近一次导入结果不一致，请重新导入后再执行启用");
       }
     }
 

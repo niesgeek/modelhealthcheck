@@ -52,3 +52,12 @@ error.log
 
 # openspec
 openspec/changes/
+
+# local agent/runtime artifacts
+.sisyphus/
+
+# alternate package-manager lockfile in pnpm repo
+/package-lock.json
+
+# Supabase CLI temp artifacts
+/supabase/.temp/

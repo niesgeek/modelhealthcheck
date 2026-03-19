@@ -5,12 +5,15 @@ import {
   AdminInput,
   AdminPageIntro,
   AdminPanel,
+  AdminStatCard,
   AdminStatusBanner,
 } from "@/components/admin/admin-primitives";
 import {TurnstileWidget} from "@/components/admin/turnstile-widget";
 import {Button} from "@/components/ui/button";
 import {bootstrapAdminAction, loginAdminAction} from "@/app/admin/actions";
 import {ensureLoggedOutForLoginPage, getTurnstileSiteKey, hasAdminUsers, isTurnstileEnabled} from "@/lib/admin/auth";
+import {loadManagedStorageSettings} from "@/lib/storage/bootstrap-store";
+import {resolveDatabaseBackend} from "@/lib/storage/resolver";
 import {getAdminFeedback} from "@/lib/admin/view";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +29,8 @@ export default async function AdminLoginPage({searchParams}: AdminLoginPageProps
   const feedback = getAdminFeedback(params);
   const turnstileSiteKey = getTurnstileSiteKey();
   const turnstileEnabled = isTurnstileEnabled();
+  const backend = resolveDatabaseBackend();
+  const managedSettings = loadManagedStorageSettings();
   let adminExists = false;
   let availabilityError: string | null = null;
 
@@ -48,15 +53,15 @@ export default async function AdminLoginPage({searchParams}: AdminLoginPageProps
           返回首页
         </Link>
 
-        <AdminPageIntro
-          eyebrow={adminExists ? "Admin / Login" : "Admin / Bootstrap"}
-          title={adminExists ? "管理员登录" : "初始化管理员账户"}
-          description={
-            adminExists
-              ? "后台已启用基础账号密码登录。完成验证后即可进入控制台，继续使用与主站一致的界面风格管理配置。"
-              : "这是后台第一次启用。先创建首个管理员账户，创建成功后会自动登录并进入后台控制台。"
-          }
-        />
+          <AdminPageIntro
+            eyebrow={adminExists ? "Admin / Login" : "Admin / Bootstrap"}
+            title={adminExists ? "管理员登录" : "初始化管理员账户"}
+            description={
+              adminExists
+                ? "后台已启用基础账号密码登录。完成验证后即可进入控制台，继续使用与主站一致的界面风格管理配置。"
+                : "这是后台第一次启用。先创建首个管理员账户；创建成功后会直接进入存储初始化步骤，你可以保留 SQLite，也可以继续配置 PostgreSQL / Supabase。"
+            }
+          />
 
         {feedback ? <AdminStatusBanner type={feedback.type} message={feedback.message} /> : null}
 
@@ -66,7 +71,7 @@ export default async function AdminLoginPage({searchParams}: AdminLoginPageProps
             description={
               adminExists
                 ? "请输入管理员用户名和密码。"
-                : "首次创建完成后，后续访问 `/admin` 会直接进入登录流程。"
+                : "首次创建完成后会直接跳到 `/admin/storage`，继续完成存储向导；后续访问 `/admin` 会直接进入登录流程。"
             }
           >
             {availabilityError ? (
@@ -107,13 +112,42 @@ export default async function AdminLoginPage({searchParams}: AdminLoginPageProps
           </AdminPanel>
 
           <AdminPanel
-            title="安全说明"
-            description="保持最小实现，但把关键安全边界补齐。"
+            title={adminExists ? "安全说明" : "初始化向导说明"}
+            description={
+              adminExists
+                ? "保持最小实现，但把关键安全边界补齐。"
+                : "当前首轮初始化支持先落在 SQLite，再受控切换到 PostgreSQL 或 Supabase。"
+            }
           >
             <div className="space-y-4 text-sm leading-7 text-muted-foreground">
+              {!adminExists ? (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <AdminStatCard
+                    label="当前启动后端"
+                    value={backend.provider}
+                    helper={backend.reason}
+                  />
+                  <AdminStatCard
+                    label="托管 Supabase"
+                    value={managedSettings.hasSupabaseAdminCredentials ? "READY" : "OPTIONAL"}
+                    helper={managedSettings.supabaseProjectHost ?? "尚未保存项目地址"}
+                  />
+                  <AdminStatCard
+                    label="SQLite 回退"
+                    value={backend.provider === "sqlite" ? "ACTIVE" : "IDLE"}
+                    helper={backend.sqliteFilePath}
+                  />
+                </div>
+              ) : null}
+
               <div className="rounded-[1.5rem] border border-border/40 bg-background/70 px-4 py-4 shadow-sm">
                 会话使用服务端签名 cookie 保存，密码仅以哈希形式存储在数据库中。
               </div>
+              {!adminExists ? (
+                <div className="rounded-[1.5rem] border border-border/40 bg-background/70 px-4 py-4 shadow-sm">
+                  推荐流程是：先创建管理员 → 在 `/admin/storage` 决定是否继续使用 SQLite → 若要接入 PostgreSQL / Supabase，再保存草稿、导入当前控制面数据并执行启用。
+                </div>
+              ) : null}
               <div className="rounded-[1.5rem] border border-border/40 bg-background/70 px-4 py-4 shadow-sm">
                 检测配置、模板、分组和通知的写操作仍然全部走服务端 action，不会把敏感密钥回传到客户端。
               </div>
